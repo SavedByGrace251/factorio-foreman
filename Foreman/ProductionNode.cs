@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Runtime.Serialization;
+using Newtonsoft.Json.Linq;
 
 namespace Foreman
 {
@@ -23,8 +24,11 @@ namespace Foreman
 		public abstract float GetUnsatisfiedDemand(Item item);
 		public abstract float GetTotalOutput(Item item);
 		public abstract float GetTotalDemand(Item item);
+		public abstract float GetDesiredOutput(Item item);
 		public abstract float GetRateLimitedByInputs();
 		public abstract float GetRateDemandedByOutputs();
+		public abstract IDictionary<Item, float> GetOutputAmounts();
+		public abstract IDictionary<Item, float> GetInputAmounts();
 		public RateType rateType = RateType.Auto;
 		public float actualRate = 0f;
 		public float desiredRate = 0f;
@@ -69,6 +73,21 @@ namespace Foreman
 			return GetTotalOutput(item) - GetUsedOutput(item);
 		}
 
+		public float GetUnusedRate()
+		{
+			float mostUsedItem = float.MaxValue;
+			foreach (Item item in Outputs)
+			{
+				float unusedRateForItem = GetUnusedOutput(item) / GetOutputAmounts()[item];
+				if (unusedRateForItem < mostUsedItem)
+				{
+					mostUsedItem = unusedRateForItem;
+				}
+			}
+
+			return mostUsedItem;
+		}
+		
 		public float GetRequiredOutput(Item item)
 		{
 			float amount = 0;
@@ -126,11 +145,125 @@ namespace Foreman
 	public class RecipeNode : ProductionNode
 	{
 		public Recipe BaseRecipe { get; private set; }
+		public Assembler Assembler { get; set; }
+
+		public abstract class ModuleFilterBase : ISerializable
+		{
+			public abstract void GetObjectData(SerializationInfo info, StreamingContext context);
+			public abstract IEnumerable<MachinePermutation> GetAllPermutations(IEnumerable<Assembler> allowedAssemblers);
+			public abstract String Name { get; }
+
+			public static ModuleFilterBase Load(JToken token)
+			{
+				ModuleFilterBase filter = ModuleBestFilter;
+
+				if (token["ModuleFilterType"] != null)
+				{
+					switch ((String)token["ModuleFilterType"])
+					{
+						case "Best":
+							filter = ModuleBestFilter;
+							break;
+						case "None":
+							filter = ModuleNoneFilter;
+							break;
+						case "Specific":
+							if (token["Module"] != null)
+							{
+								var moduleKey = (String)token["Module"];
+								if (DataCache.Modules.ContainsKey(moduleKey))
+								{
+									filter = new ModuleSpecificFilter(DataCache.Modules[moduleKey]);
+								}
+							}
+							break;
+					}
+				}
+
+				return filter;
+			}
+		}
+
+		public class ModuleSpecificFilter : ModuleFilterBase
+		{
+			public Module Module { get; set; }
+
+			public ModuleSpecificFilter(Module module)
+			{
+				this.Module = module;
+			}
+			
+			public override String Name { get { return Module.Name; } }
+
+			public override void GetObjectData(SerializationInfo info, StreamingContext context)
+			{
+				info.AddValue("ModuleFilterType", "Specific");
+				info.AddValue("Module", Module.Name);
+			}
+
+			public override IEnumerable<MachinePermutation> GetAllPermutations(IEnumerable<Assembler> allowedAssemblers)
+			{
+				List<MachinePermutation> allowedPermutations = new List<MachinePermutation>();
+				foreach (Assembler assembler in allowedAssemblers)
+				{
+					allowedPermutations.Add(new MachinePermutation(assembler, Enumerable.Repeat(this.Module, assembler.ModuleSlots).ToList()));
+				}
+
+				return allowedPermutations;
+			}
+		}
+
+		private class ModuleBestFilterImpl : ModuleFilterBase
+		{
+			public override void GetObjectData(SerializationInfo info, StreamingContext context)
+			{
+				info.AddValue("ModuleFilterType", "Best");
+			}
+
+			public override String Name { get { return "Best"; } }
+
+			public override IEnumerable<MachinePermutation> GetAllPermutations(IEnumerable<Assembler> allowedAssemblers)
+			{
+				List<MachinePermutation> allowedPermutations = new List<MachinePermutation>();
+				foreach (Assembler assembler in allowedAssemblers)
+				{
+					allowedPermutations.AddRange(assembler.GetAllPermutations());
+				}
+
+				return allowedPermutations;
+			}
+		}
+
+		private class ModuleNoneFilterImpl : ModuleFilterBase
+		{
+			public override void GetObjectData(SerializationInfo info, StreamingContext context)
+			{
+				info.AddValue("ModuleFilterType", "None");
+			}
+
+			public override String Name { get { return "None"; } }
+
+			public override IEnumerable<MachinePermutation> GetAllPermutations(IEnumerable<Assembler> allowedAssemblers)
+			{
+				List<MachinePermutation> allowedPermutations = new List<MachinePermutation>();
+				foreach (Assembler assembler in allowedAssemblers)
+				{
+					allowedPermutations.Add(new MachinePermutation(assembler, new List<Module>()));
+				}
+
+				return allowedPermutations;
+			}
+		}
+		public ModuleFilterBase ModuleFilter { get; set; }
+
+		public static ModuleFilterBase ModuleBestFilter { get { return new ModuleBestFilterImpl(); } }
+		public static ModuleFilterBase ModuleNoneFilter { get { return new ModuleNoneFilterImpl(); } }
 
 		protected RecipeNode(Recipe baseRecipe, ProductionGraph graph)
 			: base(graph)
 		{
 			BaseRecipe = baseRecipe;
+			ModuleFilter = ModuleBestFilter;
 		}
 
 		public override IEnumerable<Item> Inputs
@@ -225,6 +358,27 @@ namespace Foreman
 			return (float)Math.Round(BaseRecipe.Results[item] * actualRate, RoundingDP);
 		}
 
+		public override float GetDesiredOutput(Item item)
+		{
+			if (BaseRecipe.IsMissingRecipe
+				|| !BaseRecipe.Results.ContainsKey(item))
+			{
+				return 0f;
+			}
+
+			return (float)Math.Round(BaseRecipe.Results[item] * desiredRate, RoundingDP);
+		}
+
+		public override IDictionary<Item, float> GetInputAmounts()
+		{
+			return BaseRecipe.Ingredients;
+		}
+
+		public override IDictionary<Item, float> GetOutputAmounts()
+		{
+			return BaseRecipe.Results;
+		}
+
 		//If the graph is showing amounts rather than rates, round up all fractions (because it doesn't make sense to do half a recipe, for example)
 		private float ValidateRecipeRate(float amount)
 		{
@@ -242,26 +396,31 @@ namespace Foreman
 		{
 			var results = new Dictionary<MachinePermutation, int>();
 
-			double requiredRate = GetRateDemandedByOutputs();
+			double requiredRate = actualRate;
 			if (requiredRate == double.PositiveInfinity)
 			{
 				return results;
 			}
 			requiredRate = Math.Round(requiredRate, RoundingDP);
 
-			List<Assembler> allowedAssemblers = DataCache.Assemblers.Values
-				.Where(a => a.Enabled)
-				.Where(a => a.Categories.Contains(BaseRecipe.Category))
-				.Where(a => a.MaxIngredients >= BaseRecipe.Ingredients.Count).ToList();
+			List<Assembler> allowedAssemblers;
 
-			List<MachinePermutation> allowedPermutations = new List<MachinePermutation>();
-
-			foreach (Assembler assembler in allowedAssemblers)
+			if (Assembler != null)
 			{
-				allowedPermutations.AddRange(assembler.GetAllPermutations());
+				allowedAssemblers = new List<Assembler>();
+				allowedAssemblers.Add(this.Assembler);
+			}
+			else
+			{
+				allowedAssemblers = DataCache.Assemblers.Values
+					.Where(a => a.Enabled)
+					.Where(a => a.Categories.Contains(BaseRecipe.Category))
+					.Where(a => a.MaxIngredients >= BaseRecipe.Ingredients.Count).ToList();
 			}
 
-			var sortedPermutations = allowedPermutations.OrderBy(a => a.GetRate(BaseRecipe.Time)).ToList();
+			List<MachinePermutation> allowedPermutations = ModuleFilter.GetAllPermutations(allowedAssemblers).ToList();
+
+			var sortedPermutations = allowedPermutations.OrderBy(a => a.GetAssemblerRate(BaseRecipe.Time)).ToList();
 
 			if (sortedPermutations.Any())
 			{
@@ -271,25 +430,32 @@ namespace Foreman
 				{
 					double remainingRate = requiredRate - totalRateSoFar;
 
-					MachinePermutation permutationToAdd = sortedPermutations.LastOrDefault(p => p.GetRate(BaseRecipe.Time) <= remainingRate);
+					MachinePermutation permutationToAdd = sortedPermutations.LastOrDefault(p => p.GetAssemblerRate(BaseRecipe.Time) <= remainingRate);
 
 					if (permutationToAdd != null)
 					{
 						int numberToAdd;
-						if (Graph.OneAssemblerPerRecipe)
+						if (Graph.OneAssemblerPerRecipe || Assembler != null)
 						{
-							numberToAdd = Convert.ToInt32(Math.Ceiling(remainingRate / permutationToAdd.GetRate(BaseRecipe.Time)));
+							numberToAdd = Convert.ToInt32(Math.Ceiling(remainingRate / permutationToAdd.GetAssemblerRate(BaseRecipe.Time)));
 						}
 						else
 						{
-							numberToAdd = Convert.ToInt32(Math.Floor(remainingRate / permutationToAdd.GetRate(BaseRecipe.Time)));
+							numberToAdd = Convert.ToInt32(Math.Floor(remainingRate / permutationToAdd.GetAssemblerRate(BaseRecipe.Time)));
 						}
-						results.Add(permutationToAdd, numberToAdd);
+						if (!results.ContainsKey(permutationToAdd))
+						{
+							results.Add(permutationToAdd, numberToAdd);
+						}
+						else
+						{
+							results[permutationToAdd] += numberToAdd;
+						}
 					}
 					else
 					{
-						permutationToAdd = sortedPermutations.FirstOrDefault(a => a.GetRate(BaseRecipe.Time) > remainingRate);
-						int amount = Convert.ToInt32(Math.Ceiling(remainingRate / permutationToAdd.GetRate(BaseRecipe.Time)));
+						permutationToAdd = sortedPermutations.FirstOrDefault(a => a.GetAssemblerRate(BaseRecipe.Time) > remainingRate);
+						int amount = Convert.ToInt32(Math.Ceiling(remainingRate / permutationToAdd.GetAssemblerRate(BaseRecipe.Time)));
 						if (results.ContainsKey(permutationToAdd))
 						{
 							results[permutationToAdd] += amount;
@@ -302,7 +468,7 @@ namespace Foreman
 					totalRateSoFar = 0;
 					foreach (var a in results)
 					{
-						totalRateSoFar += a.Key.GetRate(BaseRecipe.Time) * a.Value;
+						totalRateSoFar += a.Key.GetAssemblerRate(BaseRecipe.Time) * a.Value;
 					}
 					totalRateSoFar = Math.Round(totalRateSoFar, RoundingDP);
 				}
@@ -318,7 +484,7 @@ namespace Foreman
 
 		public override string ToString()
 		{
-			return String.Format("Recipe Tree Node: {0}", BaseRecipe.Name);
+			return $"Recipe Tree Node: {BaseRecipe.Name}";
 		}
 
 		public override void GetObjectData(SerializationInfo info, StreamingContext context)
@@ -327,6 +493,11 @@ namespace Foreman
 			info.AddValue("RecipeName", BaseRecipe.Name);
 			info.AddValue("RateType", rateType);
 			info.AddValue("ActualRate", actualRate);
+			if (Assembler != null)
+			{
+				info.AddValue("Assembler", Assembler.Name);
+			}
+			ModuleFilter.GetObjectData(info, context);
 		}
 	}
 
@@ -399,6 +570,11 @@ namespace Foreman
 		{
 			return 0f;
 		}
+		
+		public override float GetDesiredOutput(Item item)
+		{
+			return desiredRate;
+		}
 
 		public override float GetTotalOutput(Item item)
 		{
@@ -415,6 +591,18 @@ namespace Foreman
 		public override string DisplayName
 		{
 			get { return SuppliedItem.FriendlyName; }
+		}
+
+		public override IDictionary<Item, float> GetInputAmounts()
+		{
+			Dictionary<Item, float> inputAmounts = new Dictionary<Item, float>();
+			inputAmounts.Add(SuppliedItem, 1);
+			return inputAmounts;
+		}
+
+		public override IDictionary<Item, float> GetOutputAmounts()
+		{
+			return new Dictionary<Item, float>();
 		}
 
 		public Dictionary<MachinePermutation, int> GetMinimumMiners()
@@ -437,15 +625,15 @@ namespace Foreman
 				allowedPermutations.AddRange(miner.GetAllPermutations());
 			}
 
-			List<MachinePermutation> sortedPermutations = allowedPermutations.OrderBy(p => p.GetRate(resource.Time)).ToList();
+			List<MachinePermutation> sortedPermutations = allowedPermutations.OrderBy(p => p.GetMinerRate(resource)).ToList();
 
 			if (sortedPermutations.Any())
 			{
 				float requiredRate = GetRequiredOutput(SuppliedItem);
-				MachinePermutation permutationToAdd = sortedPermutations.LastOrDefault(a => a.GetRate(resource.Time) < requiredRate);
+				MachinePermutation permutationToAdd = sortedPermutations.LastOrDefault(a => a.GetMinerRate(resource) < requiredRate);
 				if (permutationToAdd != null)
 				{
-					int numberToAdd = Convert.ToInt32(Math.Ceiling(requiredRate / permutationToAdd.GetRate(resource.Time)));
+					int numberToAdd = Convert.ToInt32(Math.Ceiling(requiredRate / permutationToAdd.GetMinerRate(resource)));
 					results.Add(permutationToAdd, numberToAdd);
 				}
 			}
@@ -524,6 +712,23 @@ namespace Foreman
 		public override float GetTotalOutput(Item item)
 		{
 			return 0;
+		}
+
+		public override float GetDesiredOutput(Item item)
+		{
+			return 0;
+		}
+
+		public override IDictionary<Item, float> GetOutputAmounts()
+		{
+			Dictionary<Item, float> inputAmounts = new Dictionary<Item, float>();
+			inputAmounts.Add(ConsumedItem, 1);
+			return inputAmounts;
+		}
+
+		public override IDictionary<Item, float> GetInputAmounts()
+		{
+			return new Dictionary<Item, float>();
 		}
 
 		public static ConsumerNode Create(Item item, ProductionGraph graph)

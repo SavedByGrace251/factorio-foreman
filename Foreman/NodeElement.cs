@@ -138,7 +138,7 @@ namespace Foreman
 				{
 					if (node.SuppliedItem.IsMissingItem)
 					{
-						text = String.Format("Item not loaded! ({0})", node.DisplayName);
+						text = $"Item not loaded! ({node.DisplayName})";
 					}
 					else
 					{
@@ -155,7 +155,7 @@ namespace Foreman
 				ConsumerNode node = (ConsumerNode)DisplayedNode;
 				if (node.ConsumedItem.IsMissingItem)
 				{
-					text = String.Format("Item not loaded! ({0})", node.DisplayName);
+					text = $"Item not loaded! ({node.DisplayName})";
 				}
 				else
 				{
@@ -169,7 +169,7 @@ namespace Foreman
 				{
 					if (node.BaseRecipe.IsMissingRecipe)
 					{
-						text = String.Format("Recipe not loaded! ({0})", node.DisplayName);
+						text = $"Recipe not loaded! ({node.DisplayName})";
 					}
 					else
 					{
@@ -272,6 +272,10 @@ namespace Foreman
 				foreach (NodeLink link in DisplayedNode.OutputLinks.Where(l => l.Item == tab.Item))
 				{
 					NodeElement node = Parent.GetElementForNode(link.Consumer);
+					if (node == null)
+					{
+						continue;
+					}
 					Point diff = Point.Subtract(new Point(node.Location.X + node.Width / 2, -node.Location.Y + -node.Height / 2), new Size(Location.X + Width / 2, -Location.Y + -Height / 2));
 					diff.Y = Math.Max(0, diff.Y);
 					total += Convert.ToInt32(Math.Atan2(diff.X, diff.Y) * 1000);
@@ -302,6 +306,13 @@ namespace Foreman
 
 		public override void Paint(Graphics graphics)
 		{
+            if (DisplayedNode is RecipeNode)
+            {
+                if (!((RecipeNode) DisplayedNode).BaseRecipe.Enabled)
+                {
+                    GraphicsStuff.FillRoundRect(-5, -5, Width + 10, Height + 10, 13, graphics, Brushes.DarkRed);
+                }
+            }
 			GraphicsStuff.FillRoundRect(0, 0, Width, Height, 8, graphics, backgroundBrush);
 			graphics.DrawString(text, size10Font, Brushes.White, Width / 2, Height / 2, centreFormat);
 			
@@ -341,7 +352,7 @@ namespace Foreman
 			if (linkType == LinkType.Input)
 			{
 				finalString = String.Format(line1Format, actualAmount, unit);
-				if (DisplayedNode.GetTotalDemand(item) > DisplayedNode.GetTotalInput(item)
+				if (Math.Round(DisplayedNode.GetTotalDemand(item), 2) > Math.Round(DisplayedNode.GetTotalInput(item), 2)
 					&& DisplayedNode.GetTotalDemand(item) != float.PositiveInfinity)
 				{
 					finalString += String.Format(line2Format, desiredAmount, unit);
@@ -363,7 +374,7 @@ namespace Foreman
 
 			if (linkType == LinkType.Input)
 			{
-				if (DisplayedNode.GetTotalDemand(item) <= DisplayedNode.GetTotalInput(item)
+				if (Math.Round(DisplayedNode.GetTotalDemand(item), 2) <= Math.Round(DisplayedNode.GetTotalInput(item), 2)
 					&& DisplayedNode.GetTotalDemand(item) != float.PositiveInfinity)
 				{
 					return enough;
@@ -375,7 +386,7 @@ namespace Foreman
 			}
 			else
 			{
-				if (DisplayedNode.GetTotalOutput(item) > DisplayedNode.GetRequiredOutput(item))
+				if (Math.Round(DisplayedNode.GetTotalOutput(item), 2) > Math.Round(DisplayedNode.GetRequiredOutput(item), 2))
 				{
 					return tooMuch;
 				}
@@ -450,29 +461,38 @@ namespace Foreman
 				{
 					tti.Direction = Direction.Left;
 					tti.ScreenLocation = Parent.GraphToScreen(Point.Add(Location, new Size(Width, Height / 2)));
-					tti.Text = String.Format("Recipe: {0}", (DisplayedNode as RecipeNode).BaseRecipe.FriendlyName);
-					tti.Text += String.Format("\n--Base Time: {0}s", (DisplayedNode as RecipeNode).BaseRecipe.Time);
+					tti.Text = $"Recipe: {(DisplayedNode as RecipeNode).BaseRecipe.FriendlyName}";
+					tti.Text += $"\n--Base Time: {(DisplayedNode as RecipeNode).BaseRecipe.Time}s";
 					tti.Text += String.Format("\n--Base Ingredients:");
 					foreach (var kvp in (DisplayedNode as RecipeNode).BaseRecipe.Ingredients)
 					{
-						tti.Text += String.Format("\n----{0} ({1})", kvp.Key.FriendlyName, kvp.Value.ToString());
+						tti.Text += $"\n----{kvp.Key.FriendlyName} ({kvp.Value.ToString()})";
 					}
 					tti.Text += String.Format("\n--Base Results:");
 					foreach (var kvp in (DisplayedNode as RecipeNode).BaseRecipe.Results)
 					{
-						tti.Text += String.Format("\n----{0} ({1})", kvp.Key.FriendlyName, kvp.Value.ToString());
+						tti.Text += $"\n----{kvp.Key.FriendlyName} ({kvp.Value.ToString()})";
 					}
 					if (Parent.ShowAssemblers)
 					{
 						tti.Text += String.Format("\n\nAssemblers:");
 						foreach (var kvp in assemblerBox.AssemblerList)
 						{
-							tti.Text += String.Format("\n----{0} ({1})", kvp.Key.assembler.FriendlyName, kvp.Value.ToString());
+							tti.Text += $"\n----{kvp.Key.assembler.FriendlyName} ({kvp.Value.ToString()})";
 							foreach (var Module in kvp.Key.modules.Where(m => m != null))
 							{
-								tti.Text += String.Format("\n------{0}", Module.FriendlyName);
+								tti.Text += $"\n------{Module.FriendlyName}";
 							}
 						}
+					}
+
+					if (Parent.Graph.SelectedAmountType == AmountType.FixedAmount)
+					{
+						tti.Text += $"\n\nCurrent iterations: {DisplayedNode.actualRate}";
+					} else
+					{
+						tti.Text +=
+						    $"\n\nCurrent Rate: {(Parent.Graph.SelectedUnit == RateUnit.PerMinute ? DisplayedNode.actualRate/60 : DisplayedNode.actualRate)}/{(Parent.Graph.SelectedUnit == RateUnit.PerMinute ? "m" : "s")}";
 					}
 					Parent.AddTooltip(tti);
 				}

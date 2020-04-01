@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Drawing;
+using Foreman.Properties;
 
 namespace Foreman
 {
@@ -30,12 +31,23 @@ namespace Foreman
 			Name = name;
 			ResourceCategories = new List<string>();
 			Enabled = true;
+		    UseModules = Settings.Default.MinersUseModules;
 		}
 
-		public float GetRate(Resource resource)
+        public float GetRate(Resource resource, IEnumerable<Module> modules)
 		{
+			double finalSpeed = this.Speed;
+			foreach (Module module in modules.Where(m => m != null))
+			{
+				finalSpeed += module.SpeedBonus * this.Speed;
+			}
+
 			//According to http://www.factorioforums.com/wiki/index.php?title=Mining_drill
-			return (MiningPower - resource.Hardness) * Speed / resource.Time;
+			double timeForOneItem = resource.Time / ((MiningPower - resource.Hardness) * finalSpeed);
+
+			timeForOneItem = Math.Ceiling(timeForOneItem * 60d) / 60d;   //Round up to the nearest tick, since mining can't start until the start of a new tick
+
+			return (float)(1d / timeForOneItem);
 		}
 	}
 }

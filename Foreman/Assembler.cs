@@ -11,16 +11,14 @@ namespace Foreman
 		public ProductionEntity assembler;
 		public List<Module> modules;
 
-		public double GetRate(float timeDivisor)
+		public double GetAssemblerRate(float recipeTime)
 		{
-			float speed = assembler.Speed;
+			return (assembler as Assembler).GetRate(recipeTime, modules);
+		}
 
-			foreach (Module module in modules.OfType<Module>())
-			{
-				speed += module.SpeedBonus * assembler.Speed;
-			}
-
-			return 60 / (Math.Ceiling(timeDivisor / speed * 60));
+		public double GetMinerRate(Resource r)
+		{
+			return (assembler as Miner).GetRate(r, modules);
 		}
 
 		public MachinePermutation(ProductionEntity machine, ICollection<Module> modules)
@@ -31,12 +29,22 @@ namespace Foreman
 	}
 
 	public abstract class ProductionEntity
-	{
+    { 
 		public String Name { get; protected set; }
 		public bool Enabled { get; set; }
 		public Bitmap Icon { get; set; }
-		public int ModuleSlots { get; set; }
-		public float Speed { get; set; }
+
+        public bool UseModules { get; set; }
+
+        private int _moduleSlots;
+
+	    public int ModuleSlots
+	    {
+	        get { return UseModules ? _moduleSlots : 0; }
+	        set { _moduleSlots = value; }
+	    }
+
+	    public float Speed { get; set; }
 		private String friendlyName;
 		public String FriendlyName
 		{
@@ -56,12 +64,7 @@ namespace Foreman
 				friendlyName = value;
 			}
 		}
-
-		public float GetRate(float timeDivisor)
-		{
-			return 1 / timeDivisor * Speed;
-		}
-
+		
 		public IEnumerable<MachinePermutation> GetAllPermutations()
 		{
 			yield return new MachinePermutation(this, new List<Module>());
@@ -96,11 +99,29 @@ namespace Foreman
 			Name = name;
 			Categories = new List<string>();
 			AllowedEffects = new List<string>();
+		    UseModules = true;
 		}
 
 		public override string ToString()
 		{
-			return String.Format("Assembler: {0}", Name);
+			return $"Assembler: {Name}";
+		}
+
+		public float GetRate(float recipeTime, IEnumerable<Module> speedModules = null)
+		{
+			double finalSpeed = this.Speed;
+			if (speedModules != null)
+			{
+				foreach (Module module in speedModules.Where(m => m != null))
+				{
+					finalSpeed += module.SpeedBonus * this.Speed;
+				}
+			}
+
+			double craftingTime = recipeTime / finalSpeed;
+			craftingTime = (float)(Math.Ceiling(craftingTime * 60d) / 60d); //Machines have to wait for a new tick before starting a new item, so round up to the nearest tick
+
+			return (float)(1d / craftingTime);
 		}
 	}
 

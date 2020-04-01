@@ -14,6 +14,7 @@ namespace Foreman
 		public Dictionary<Item, float> Results { get; private set; }
 		public Dictionary<Item, float> Ingredients { get; private set; }
 		public Boolean IsMissingRecipe = false;
+		public Boolean IsCyclic { get; set; }
 		private Bitmap uniqueIcon = null;
 		public Bitmap Icon
 		{
@@ -41,7 +42,7 @@ namespace Foreman
 		{
 			get
 			{
-				if (DataCache.LocaleFiles["recipe-name"].ContainsKey(Name))
+				if (DataCache.LocaleFiles.ContainsKey("recipe-name") && DataCache.LocaleFiles["recipe-name"].ContainsKey(Name))
 				{
 					return DataCache.LocaleFiles["recipe-name"][Name];
 				}
@@ -55,6 +56,7 @@ namespace Foreman
 				}
 			}
 		}
+        public Boolean Enabled { get; set; }
 
 		public Recipe(String name, float time, Dictionary<Item, float> ingredients, Dictionary<Item, float> results)
 		{
@@ -62,6 +64,7 @@ namespace Foreman
 			this.Time = time;
 			this.Ingredients = ingredients;
 			this.Results = results;
+            this.Enabled = true; //Nothing will have been loaded yet to disable recipes.
 		}
 
 		public override int GetHashCode()
